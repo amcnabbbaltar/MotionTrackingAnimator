@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 69ef6336dd2d55448a0768306219ec85
+DefaultImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 327614
+  packageName: Tracker Pro
+  packageVersion: 1.3.0
+  assetPath: Assets/StreamingAssets/unifiedraytracing.manifest
+  uploadId: 942530

@@ -39,6 +39,14 @@ namespace TrackerPro
         private RectTransform screen;
         private void Start()
         {
+            if (skeletonParent == null)
+            {
+                Debug.LogError($"[{GetType().Name}] '{name}': assign 'Skeleton Parent' in the Inspector " +
+                               "(drag in the same RectTransform the working mocap character uses), " +
+                               "or remove this component if this character isn't being used. Disabling it for now.", this);
+                enabled = false;
+                return;
+            }
             virtualNeck = new LandmarkData { transform = new GameObject().transform, visibility = 0 };
             virtualNeck.transform.parent = skeletonParent;
             virtualNeck.transform.localEulerAngles = Vector3.zero;
@@ -64,6 +72,7 @@ namespace TrackerPro
         public void MapBones()
         {
             head = avatar.GetBoneTransform(HumanBodyBones.Head);
+            _headRestLocal = head.localRotation;
             hip = avatar.GetBoneTransform(HumanBodyBones.Hips);
 
             //right
@@ -121,15 +130,25 @@ namespace TrackerPro
             boneMapper.refChild = bones[(int)Body.NOSE];
             boneMappers.Add(boneMapper);
 
-            boneMapper = new BoneMapper(avatar.GetBoneTransform(HumanBodyBones.LeftFoot), avatar.GetBoneTransform(HumanBodyBones.Neck));
-            boneMapper.refParent = bones[(int)Body.LEFT_ANKLE]; ;
-            boneMapper.refChild = bones[(int)Body.LEFT_INDEX]; ;
-            boneMappers.Add(boneMapper);
+            // Feet: aim ankle -> toes (was ankle -> Neck, which twists the feet).
+            // MediaPipe's *_FOOT_INDEX landmarks are the toe tips. Skipped if the rig has no toe bones.
+            Transform leftToes = avatar.GetBoneTransform(HumanBodyBones.LeftToes);
+            if (leftToes != null)
+            {
+                boneMapper = new BoneMapper(avatar.GetBoneTransform(HumanBodyBones.LeftFoot), leftToes);
+                boneMapper.refParent = bones[(int)Body.LEFT_ANKLE];
+                boneMapper.refChild = bones[(int)Body.LEFT_FOOT_INDEX];
+                boneMappers.Add(boneMapper);
+            }
 
-            boneMapper = new BoneMapper(avatar.GetBoneTransform(HumanBodyBones.RightFoot), avatar.GetBoneTransform(HumanBodyBones.Neck));
-            boneMapper.refParent = bones[(int)Body.RIGHT_ANKLE];
-            boneMapper.refChild = bones[(int)Body.RIGHT_INDEX];
-            boneMappers.Add(boneMapper);
+            Transform rightToes = avatar.GetBoneTransform(HumanBodyBones.RightToes);
+            if (rightToes != null)
+            {
+                boneMapper = new BoneMapper(avatar.GetBoneTransform(HumanBodyBones.RightFoot), rightToes);
+                boneMapper.refParent = bones[(int)Body.RIGHT_ANKLE];
+                boneMapper.refChild = bones[(int)Body.RIGHT_FOOT_INDEX];
+                boneMappers.Add(boneMapper);
+            }
 
 
         }
@@ -137,6 +156,7 @@ namespace TrackerPro
         public override void OnPoseUpdate(Solution solution)
         {
             //here we are handing pose data only. if you want to face and hand finger tracking also add similar handlers for them.
+            if (!enabled || bones.Count == 0) return; // not set up (see Start)
             coreHolisticSolution = (CoreHolisticTrackingSolution)solution;
             if (!isTracking())
             {
@@ -228,13 +248,19 @@ namespace TrackerPro
         }
         private void FixHeadRotation()
         {
-            float zDiff = bones[(int)Body.RIGHT_EYE].transform.position.z - bones[(int)Body.LEFT_EYE].transform.position.z;
-            float yAngle = zDiff * 3000;
-            yAngle = Mathf.Clamp(yAngle, -90, 90);
-            yAngle = Mathf.Abs(yAngle) < 5 ? 0 : yAngle;
-            head.localRotation = Quaternion.Slerp(head.localRotation, Quaternion.Euler(head.localEulerAngles.x, -yAngle, head.localEulerAngles.z), smoothness);
-
+            // Was: eye depth difference * 3000, clamped to ±90°. Eye depth is noisy (especially close to
+            // the camera), so 3 cm of noise snapped the head a full 90°. Now: a real angle from the
+            // ear line, limited to what a neck can do, applied on top of the head's rest pose.
+            Vector3 ears = bones[(int)Body.RIGHT_EAR].transform.position - bones[(int)Body.LEFT_EAR].transform.position;
+            float yAngle = Mathf.Atan2(ears.z, Mathf.Abs(ears.x)) * Mathf.Rad2Deg;
+            yAngle = Mathf.Clamp(yAngle, -60f, 60f);
+            if (Mathf.Abs(yAngle) < 5f) yAngle = 0f;
+            _headYaw = Mathf.LerpAngle(_headYaw, -yAngle, smoothness);
+            head.localRotation = _headRestLocal;
+            head.rotation = Quaternion.AngleAxis(_headYaw, transform.up) * head.rotation;
         }
+        private float _headYaw;
+        private Quaternion _headRestLocal;
         private void Move()
         {
             var leftHipPosition = screen.rect.GetPoint(coreHolisticSolution.poseLandmarks.Landmark[(int)Body.LEFT_HIP], 0, false);

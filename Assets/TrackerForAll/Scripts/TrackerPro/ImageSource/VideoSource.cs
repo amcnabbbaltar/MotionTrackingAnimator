@@ -18,14 +18,18 @@ namespace TrackerPro.Unity
       {
         if (_video == null && _availableSources != null && _availableSources.Length > 0)
         {
-          video = _availableSources[0];
+          // Skip entries whose clip asset is missing (e.g. the demo video isn't in the repo)
+          video = _availableSources.FirstOrDefault(clip => clip != null);
         }
         return _video;
       }
       set
       {
         _video = value;
-        resolution = new ResolutionStruct((int)_video.width, (int)_video.height, _video.frameRate);
+        if (_video != null)
+        {
+          resolution = new ResolutionStruct((int)_video.width, (int)_video.height, _video.frameRate);
+        }
       }
     }
 
@@ -33,7 +37,7 @@ namespace TrackerPro.Unity
 
     public override string sourceName => video != null ? video.name : null;
 
-    public override string[] sourceCandidateNames => _availableSources?.Select(source => source.name).ToArray();
+    public override string[] sourceCandidateNames => _availableSources?.Select(source => source != null ? source.name : "(missing clip)").ToArray();
 
     public override ResolutionStruct[] availableResolutions => video == null ? null : new ResolutionStruct[] { new ResolutionStruct((int)video.width, (int)video.height, video.frameRate) };
 

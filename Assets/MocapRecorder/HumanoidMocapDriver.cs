@@ -42,6 +42,11 @@ namespace MocapRecording
         [Tooltip("Uses the Holistic tracker's 21 hand points per hand (FullBodyAvatarMocap scene). Needs a rig with finger bones.")]
         public bool driveFingers = true;
         [Range(0f, 0.95f)] public float fingerSmoothing = 0.6f;
+        [Tooltip("When the camera can't see a leg (too close, out of frame), stand it up straight instead of " +
+                 "following the tracker's guess, which usually has the knees folded.")]
+        public bool straightenHiddenLegs = true;
+        [Tooltip("How sure the tracker must be about a knee/ankle before the leg follows it fully.")]
+        [Range(0.3f, 0.95f)] public float legConfidence = 0.65f;
         [Tooltip("Moves the hips down when the knees bend so the feet stay on the floor (squats, crouches).")]
         public bool keepFeetOnGround = true;
 
@@ -136,6 +141,7 @@ namespace MocapRecording
 
         readonly Vector3[] _lm = new Vector3[COUNT];
         readonly bool[] _lmSeen = new bool[COUNT];
+        readonly float[] _vis = new float[COUNT];   // smoothed visibility per landmark
         object _lastList;
         float _lastDataTime = -999f, _nextTrackerSearch;
         bool _hasPose, _ready;
@@ -342,6 +348,7 @@ namespace MocapRecording
                 // MediaPipe (x right, y down, z away from camera) -> character space
                 // (+X = character's right, +Y = up, +Z = character's forward).
                 var p = new Vector3(mirror ? src.X : -src.X, -src.Y, -src.Z);
+                _vis[i] = Mathf.Lerp(_vis[i], src.Visibility, 0.25f); // smoothed, so legs fade instead of popping
                 if (!_lmSeen[i]) { _lm[i] = p; _lmSeen[i] = true; continue; }
                 if (src.Visibility < visibilityThreshold) continue; // hold last good value
                 _lm[i] = Vector3.Lerp(_lm[i], p, k);
@@ -420,6 +427,11 @@ namespace MocapRecording
                 Vector3 lf = _lm[L_FOOT] - _lm[L_ANK], rf = _lm[R_FOOT] - _lm[R_ANK];
                 SolveEnd(_lFoot, lf, Vector3.Cross(lf, hipRight));
                 SolveEnd(_rFoot, rf, Vector3.Cross(rf, hipRight));
+                if (straightenHiddenLegs)
+                {
+                    BlendToStanding(HumanBodyBones.LeftFoot, LegWeight(L_ANK, L_FOOT));
+                    BlendToStanding(HumanBodyBones.RightFoot, LegWeight(R_ANK, R_FOOT));
+                }
             }
 
             if (driveFingers && _fingerBoneCount > 0)
@@ -574,6 +586,30 @@ namespace MocapRecording
 
             SetFromRest(l.upper, upper, sec, l.restUpperDir, l.restSec);
             SetFromRest(l.lower, lower, sec, l.restLowerDir, l.restSec);
+
+            if (l.isLeg && straightenHiddenLegs)
+            {
+                float w = LegWeight(l.b, l.c);
+                BlendToStanding(l.upper, w);
+                BlendToStanding(l.lower, w);
+            }
+        }
+
+        // 0 = camera can't see this knee/ankle (use a straight standing leg), 1 = clearly visible (follow tracking)
+        float LegWeight(int knee, int ankle)
+        {
+            float v = Mathf.Min(_vis[knee], _vis[ankle]);
+            return Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(legConfidence - 0.25f, legConfidence, v));
+        }
+
+        // Standing = the bone's rest orientation relative to the character, i.e. straight down under the hips,
+        // ignoring how the hips are tilted.
+        void BlendToStanding(HumanBodyBones bone, float weight)
+        {
+            var t = B(bone);
+            if (t == null || weight >= 0.999f) return;
+            Quaternion standing = _root.rotation * _restCharRot[(int)bone];
+            t.rotation = Quaternion.Slerp(standing, t.rotation, weight);
         }
 
         void SolveEnd(EndBone e, Vector3 primary, Vector3 sec)
